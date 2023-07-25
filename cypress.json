@@ -1,0 +1,10 @@
+{
+	"projectId": "ozdnmh",
+	"fileServerFolder": "src/tests",
+	"fixturesFolder": "src/tests/fixtures",
+	"integrationFolder": "src/tests/cypress/integration",
+	"screenshotsFolder": "src/tests/cypress/screenshots",
+	"videosFolder": "src/tests/cypress/videos",
+	"pluginsFile": "src/tests/cypress/plugins/",
+	"supportFile": "src/tests/cypress/support/"
+}

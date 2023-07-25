@@ -1,0 +1,165 @@
+variables:
+    DOCKER_HOST: tcp://127.0.0.1:2375
+    DOCKER_DRIVER: overlay2
+    CACHE_FALLBACK_KEY: dev-1
+    KUBERNETES_CPU_REQUESTS: 1000m
+    KUBERNETES_MEMORY_REQUESTS: 1Gi
+
+    #version-v1.8.6
+    #ADD intelligeni specific variables here except the group variables. Avoid putting sensitive data directly here.
+    #for image name "<image_name>" container image url will be "us.gcr.io/automation-intelligeni-dev/<image_name>"
+    # keep the name of project in sonarQube same as image_name here 1.5.0#
+    IMAGE_NAME: intelligeni-portal-app
+
+default:
+    image: docker:18.09.7
+    services:
+        - docker:18.09.7-dind
+
+stages:
+    - install dependencies
+    - quality check
+    - test
+    - build UI
+    - build
+    - tag
+    - publish
+
+install dependencies:
+    image: node:16.18.0-alpine
+    inherit:
+        default: false
+    stage: install dependencies
+    cache:
+        key: $CI_COMMIT_REF_SLUG
+        paths:
+            - node_modules/
+            - .yarn
+    script:
+        - echo $CI_COMMIT_REF_SLUG
+        - yarn --frozen-lockfile --network-timeout 100000
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^Release-.*$/ || $CI_COMMIT_BRANCH =~ /^Hotfix-.*$/ || $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_TAG'
+          changes:
+              - yarn.lock
+
+lint:
+    image: node:16.18.0-alpine
+    inherit:
+        default: false
+    stage: quality check
+    cache:
+        key: $CI_COMMIT_REF_SLUG
+        paths:
+            - node_modules/
+            - .yarn
+        policy: pull
+    script:
+        - yarn lintcheck
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^Release-.*$/ || $CI_COMMIT_BRANCH =~ /^Hotfix-.*$/ || $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "dev"'
+
+typecheck:
+    image: node:16.18.0-alpine
+    inherit:
+        default: false
+    stage: quality check
+    cache:
+        key: $CI_COMMIT_REF_SLUG
+        paths:
+            - node_modules/
+            - .yarn
+        policy: pull
+    script:
+        - yarn typecheck
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^Release-.*$/ || $CI_COMMIT_BRANCH =~ /^Hotfix-.*$/ || $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "dev"'
+
+build UI:
+    image: node:16.18.0-alpine
+    stage: build UI
+    inherit:
+        default: false
+    dependencies:
+        - lint
+        - typecheck
+    cache:
+        key: $CI_COMMIT_REF_SLUG
+        paths:
+            - node_modules/
+            - .yarn
+        policy: pull
+    script:
+        - yarn build
+    artifacts:
+        paths:
+            - build
+    rules:
+        - if: '$CI_COMMIT_BRANCH =~ /^Release-.*$/ || $CI_COMMIT_BRANCH =~ /^Hotfix-.*$/ || $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_TAG'
+
+build:
+    stage: build
+    inherit:
+        default: false
+    image:
+        name: gcr.io/kaniko-project/executor:debug
+        entrypoint: [""]
+    script:
+        - mkdir -p /kaniko/.docker
+        - echo "{\"auths\":{\"intelligeni.azurecr.io\":{\"username\":\"$AZURE_APP_ID\",\"password\":\"$AZURE_APP_SECRET\"}}}" > /kaniko/.docker/config.json
+        - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination intelligeni.azurecr.io/$IMAGE_NAME:$CI_COMMIT_BRANCH-$CI_PIPELINE_ID --cache=true
+    after_script:
+        - rm /kaniko/.docker/config.json
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH =~ /^Release-.*$/'
+#removing $CI_COMMIT_BRANCH =~ /^Hotfix-.*$/ for now
+tagging:
+    stage: tag
+    inherit:
+        default: false
+    image:
+        name: alpine/git
+        entrypoint: [""]
+    script:
+        - git config user.email "${GITLAB_USER_EMAIL}"
+        - git config user.name "${GITLAB_USER_NAME}"
+        - version=$(echo $CI_COMMIT_TITLE | grep Merge | sed -nr 's/.*-(v[0-9]+)\.([0-9]+)\.([0-9]+).*/\1.\2.\3/p')
+        - echo $version
+        - git remote add api-origin https://oauth2:${GITLAB_ACCESS_TOKEN}@gitlab.com/${CI_PROJECT_PATH}
+        - git tag -a $version -m "releasing new tag $version"
+        - git push api-origin $version
+    dependencies:
+        - sonarqube-check
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "master"'
+
+sonarqube-check:
+    stage: test
+    inherit:
+        default: false
+    image:
+        name: sonarsource/sonar-scanner-cli:latest
+        entrypoint: [""]
+    variables:
+        GIT_DEPTH: 0
+    script:
+        - sonar-scanner -Dsonar.qualitygate.wait=true -Dsonar.projectKey=$IMAGE_NAME
+    allow_failure: false
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "dev"'
+
+publish:
+    stage: publish
+    inherit:
+        default: false
+    image:
+        name: gcr.io/kaniko-project/executor:debug
+        entrypoint: [""]
+    script:
+        - mkdir -p /kaniko/.docker
+        - echo "{\"auths\":{\"intelligeni.azurecr.io\":{\"username\":\"$AZURE_APP_ID\",\"password\":\"$AZURE_APP_SECRET\"}}}" > /kaniko/.docker/config.json
+        - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination intelligeni.azurecr.io/$IMAGE_NAME:$CI_COMMIT_TAG --cache=true
+    after_script:
+        - rm /kaniko/.docker/config.json
+    rules:
+        - if: $CI_COMMIT_TAG

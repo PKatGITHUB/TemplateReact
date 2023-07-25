@@ -1,0 +1,27 @@
+node_modules
+*.code-workspace
+dist/
+build/
+
+.env
+*.log
+
+*.tsbuildinfo
+
+.VSCodeCounter/
+
+size-plugin.json
+# Local Netlify folder
+.netlify
+
+.eslintcache
+**/.vscode/
+src/tests/coverage/lcov-report
+
+# data file
+
+src/components/sample_data.json
+src/components/sample_data_raw.json
+**/.DS_Store
+
+.metals
